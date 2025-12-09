@@ -19,6 +19,8 @@ type Monitor struct {
 	notifier        *notify.Notifier
 	serviceStatuses map[string]Status
 	muStatusLock    sync.RWMutex
+	pausedServices  map[string]bool
+	muPausedLock    sync.RWMutex
 }
 
 // NewMonitor creates a new monitor instance
@@ -43,6 +45,7 @@ func NewMonitor(cfg *config.Config) (*Monitor, error) {
 		done:            make(chan struct{}),
 		notifier:        notify.NewNotifier(true),
 		serviceStatuses: make(map[string]Status),
+		pausedServices:  make(map[string]bool),
 	}, nil
 }
 
@@ -88,6 +91,15 @@ func (m *Monitor) checkAll(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	for _, service := range m.Config.Services {
+		// Skip paused services
+		m.muPausedLock.RLock()
+		isPaused := m.pausedServices[service.Name]
+		m.muPausedLock.RUnlock()
+
+		if isPaused {
+			continue
+		}
+
 		wg.Add(1)
 		go func(svc config.Service) {
 			defer wg.Done()
@@ -195,6 +207,27 @@ func (m *Monitor) Results() <-chan Result {
 // Done returns a channel that's closed when monitoring stops
 func (m *Monitor) Done() <-chan struct{} {
 	return m.done
+}
+
+// PauseService pauses monitoring for a service
+func (m *Monitor) PauseService(serviceName string) {
+	m.muPausedLock.Lock()
+	defer m.muPausedLock.Unlock()
+	m.pausedServices[serviceName] = true
+}
+
+// ResumeService resumes monitoring for a service
+func (m *Monitor) ResumeService(serviceName string) {
+	m.muPausedLock.Lock()
+	defer m.muPausedLock.Unlock()
+	m.pausedServices[serviceName] = false
+}
+
+// IsPaused returns whether a service is paused
+func (m *Monitor) IsPaused(serviceName string) bool {
+	m.muPausedLock.RLock()
+	defer m.muPausedLock.RUnlock()
+	return m.pausedServices[serviceName]
 }
 
 // closeCheckers closes all checker resources

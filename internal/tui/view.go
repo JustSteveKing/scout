@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,13 +11,14 @@ import (
 )
 
 var (
-	colorAccent    = lipgloss.Color("#04D9FF") // Neon Cyan
-	colorHealthy   = lipgloss.Color("#00FF94") // Neon Green
-	colorUnhealthy = lipgloss.Color("#FF0055") // Neon Red
-	colorChecking  = lipgloss.Color("#FFD700") // Gold
+	colorAccent    = lipgloss.Color("#7dcfff") // Softer Cyan
+	colorHealthy   = lipgloss.Color("#9ece6a") // Soft Green
+	colorUnhealthy = lipgloss.Color("#f7768e") // Soft Red
+	colorChecking  = lipgloss.Color("#e0af68") // Warm Yellow
+	colorPaused    = lipgloss.Color("#565f89") // Muted Blue for paused
 	colorMuted     = lipgloss.Color("#565f89") // Muted Blue
-	colorSubtle    = lipgloss.Color("#24283b") // Dark Blue
-	colorCard      = lipgloss.Color("#16161e") // Very Dark Blue
+	colorSubtle    = lipgloss.Color("#414868") // Lighter subtle
+	colorCard      = lipgloss.Color("#1a1b26") // Softer dark background
 	colorText      = lipgloss.Color("#c0caf5") // Light Blue/White
 
 	// Title style
@@ -43,6 +45,10 @@ var (
 
 	checkingStyle = lipgloss.NewStyle().
 			Foreground(colorChecking).
+			Bold(true)
+
+	pausedStyle = lipgloss.NewStyle().
+			Foreground(colorPaused).
 			Bold(true)
 
 	// Base card style (border color will be overridden)
@@ -90,6 +96,11 @@ func (m Model) View() string {
 				Padding(1, 2).
 				Render(m.form.View()),
 		)
+	}
+
+	// Render error detail modal if active
+	if m.showErrorDetail {
+		return m.renderErrorDetailOverlay()
 	}
 
 	// Render detail modal if active
@@ -150,6 +161,11 @@ func (m Model) View() string {
 			}
 		}
 
+		// Sort each group by name for stable positioning
+		sort.Slice(checking, func(i, j int) bool { return checking[i].Name < checking[j].Name })
+		sort.Slice(healthy, func(i, j int) bool { return healthy[i].Name < healthy[j].Name })
+		sort.Slice(unhealthy, func(i, j int) bool { return unhealthy[i].Name < unhealthy[j].Name })
+
 		// Render checking services in grid
 		selected := m.getSelectedName()
 		if len(checking) > 0 {
@@ -176,7 +192,7 @@ func (m Model) View() string {
 	// Create a status bar style footer
 	// [Last checked] [Help] [Status]
 
-	helpStr := "Quit: q / Ctrl+C   New Service: n"
+	helpStr := "Quit: q   New: n   Pause: p   Error: e   Copy curl: c   Detail: Enter"
 
 	// Status summary and last checked indicator
 	var statusSummary string
@@ -204,8 +220,13 @@ func (m Model) View() string {
 		lastCheckedText = fmt.Sprintf("Last checked: %s", m.formatTime(lastChecked))
 	}
 
+	// Show clipboard message if recent
+	if m.clipboardMsg != "" && time.Since(m.clipboardTime) < 3*time.Second {
+		lastCheckedText = lipgloss.NewStyle().Foreground(colorHealthy).Render(m.clipboardMsg)
+	}
+
 	// Footer layout
-	// Last checked: 12 seconds ago      Quit: q / Ctrl+C   New Service: n      5/10 Healthy
+	// Last checked: 12 seconds ago      Quit: q   New: n   Pause: p   Error: e   Copy curl: c   Detail: Enter      5/10 Healthy
 
 	footerStyle := lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -263,21 +284,19 @@ func (m Model) renderHeader(width int, totalServices int) string {
 		stats = fmt.Sprintf("%s  %s  %s", healthyIndicator, unhealthyIndicator, checkingIndicator)
 	}
 
-	// Layout: Title on left, Stats on right
+	// Layout: SCOUT on left, stats on right, vertically aligned
 	// SCOUT                                      ● 5  ● 0  ● 1
 
-	availableWidth := width - lipgloss.Width(titleRendered) - lipgloss.Width(stats) - 2
-	if availableWidth < 0 {
-		availableWidth = 0
+	left := " " + titleRendered
+	right := stats + " "
+
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
 	}
 
-	header := lipgloss.JoinHorizontal(lipgloss.Center,
-		titleRendered,
-		strings.Repeat(" ", availableWidth),
-		stats,
-	)
-
-	b.WriteString(header)
+	headerLine := left + strings.Repeat(" ", gap) + right
+	b.WriteString(headerLine)
 	b.WriteString("\n")
 
 	// Gradient separator or just a line
@@ -320,15 +339,19 @@ func (m Model) renderServiceCompact(svc ServiceState, width int, isSelected bool
 
 	// Determine border color based on status
 	var borderColor lipgloss.Color
-	switch svc.Status {
-	case monitor.StatusHealthy:
-		borderColor = colorHealthy
-	case monitor.StatusUnhealthy:
-		borderColor = colorUnhealthy
-	case monitor.StatusChecking:
-		borderColor = colorChecking
-	default:
-		borderColor = colorSubtle
+	if svc.Paused {
+		borderColor = colorPaused
+	} else {
+		switch svc.Status {
+		case monitor.StatusHealthy:
+			borderColor = colorHealthy
+		case monitor.StatusUnhealthy:
+			borderColor = colorUnhealthy
+		case monitor.StatusChecking:
+			borderColor = colorChecking
+		default:
+			borderColor = colorSubtle
+		}
 	}
 	if isSelected {
 		borderColor = colorAccent
@@ -336,7 +359,9 @@ func (m Model) renderServiceCompact(svc ServiceState, width int, isSelected bool
 
 	// Status icon
 	var statusIcon string
-	if svc.IsChecking {
+	if svc.Paused {
+		statusIcon = "⏸"
+	} else if svc.IsChecking {
 		if s, exists := m.spinners[svc.Name]; exists {
 			statusIcon = s.View()
 		} else {
@@ -364,7 +389,10 @@ func (m Model) renderServiceCompact(svc ServiceState, width int, isSelected bool
 
 	// Details section
 	// Status code and response time on one line
-	if (svc.StatusCode > 0 || svc.ResponseTime > 0) && !svc.IsChecking {
+	if svc.Paused {
+		b.WriteString(pausedStyle.Render("Paused"))
+		b.WriteString("\n")
+	} else if (svc.StatusCode > 0 || svc.ResponseTime > 0) && !svc.IsChecking {
 		var details []string
 		if svc.StatusCode > 0 {
 			codeStr := fmt.Sprintf("%d", svc.StatusCode)
@@ -591,4 +619,157 @@ func (m Model) formatTime(t time.Time) string {
 	}
 
 	return t.Format("15:04:05")
+}
+
+// renderErrorDetailOverlay shows a modal with detailed error information
+func (m Model) renderErrorDetailOverlay() string {
+	width := m.width
+	height := m.height
+	if width < 60 {
+		width = 60
+	}
+	if height < 20 {
+		height = 20
+	}
+
+	selected := m.errorDetailName
+	if selected == "" {
+		selected = m.getSelectedName()
+	}
+
+	var svc *ServiceState
+	for i := range m.services {
+		if m.services[i].Name == selected {
+			svc = &m.services[i]
+			break
+		}
+	}
+
+	if svc == nil || svc.Error == nil {
+		return lipgloss.Place(
+			width,
+			height,
+			lipgloss.Center,
+			lipgloss.Center,
+			baseCardStyle.
+				BorderForeground(colorUnhealthy).
+				Width(width-8).
+				Render("No error details available. Press Esc to close."),
+		)
+	}
+
+	var b strings.Builder
+
+	// Title
+	titleLine := fmt.Sprintf("✗ Error Details: %s", serviceNameStyle.Render(svc.Name))
+	b.WriteString(titleStyle.Render(titleLine))
+	b.WriteString("\n\n")
+
+	// Error message
+	b.WriteString(headerStyle.Render("Error Message"))
+	b.WriteString("\n")
+	errorMsg := svc.Error.Error()
+	b.WriteString(errorStyle.Render(errorMsg))
+	b.WriteString("\n\n")
+
+	// Additional context
+	b.WriteString(headerStyle.Render("Context"))
+	b.WriteString("\n")
+	if svc.StatusCode > 0 {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Status Code: %d", svc.StatusCode)))
+		b.WriteString("\n")
+	}
+	if !svc.LastChecked.IsZero() {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Last Checked: %s", svc.LastChecked.Format("2006-01-02 15:04:05"))))
+		b.WriteString("\n")
+	}
+	if svc.ResponseTime > 0 {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Response Time: %s", m.formatDuration(svc.ResponseTime))))
+		b.WriteString("\n")
+	}
+
+	cfg := m.getServiceConfig(svc.Name)
+	if cfg != nil {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("Service Configuration"))
+		b.WriteString("\n")
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("URL: %s", cfg.URL)))
+		b.WriteString("\n")
+		if cfg.HealthEndpoint != "" {
+			b.WriteString(secondaryStyle.Render(fmt.Sprintf("Health Endpoint: %s", cfg.HealthEndpoint)))
+			b.WriteString("\n")
+		}
+		method := cfg.Method
+		if method == "" {
+			method = "GET"
+		}
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Method: %s", method)))
+		b.WriteString("\n")
+	}
+
+	// Footer hint
+	b.WriteString("\n")
+	b.WriteString(metadataStyle.Render("Press Esc to close"))
+
+	card := baseCardStyle.
+		BorderForeground(colorUnhealthy).
+		Width(width - 10).
+		Render(b.String())
+
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		card,
+	)
+}
+
+// generateCurlCommand generates a curl command for the selected service
+func (m Model) generateCurlCommand(serviceName string) string {
+	cfg := m.getServiceConfig(serviceName)
+	if cfg == nil {
+		return ""
+	}
+
+	url := cfg.URL
+	if cfg.HealthEndpoint != "" {
+		// Append health endpoint to URL
+		if !strings.HasSuffix(url, "/") && !strings.HasPrefix(cfg.HealthEndpoint, "/") {
+			url += "/"
+		}
+		url += cfg.HealthEndpoint
+	}
+
+	method := cfg.Method
+	if method == "" {
+		method = "GET"
+	}
+
+	var parts []string
+	parts = append(parts, "curl")
+	parts = append(parts, fmt.Sprintf("-X %s", method))
+
+	// Add headers
+	for key, value := range cfg.Headers {
+		parts = append(parts, fmt.Sprintf("-H '%s: %s'", key, value))
+	}
+
+	// Add authentication
+	if cfg.Auth != nil {
+		switch cfg.Auth.Type {
+		case "bearer":
+			if cfg.Auth.Token != "" {
+				parts = append(parts, fmt.Sprintf("-H 'Authorization: Bearer %s'", cfg.Auth.Token))
+			}
+		case "basic":
+			if cfg.Auth.Username != "" && cfg.Auth.Password != "" {
+				parts = append(parts, fmt.Sprintf("-u '%s:%s'", cfg.Auth.Username, cfg.Auth.Password))
+			}
+		}
+	}
+
+	parts = append(parts, fmt.Sprintf("'%s'", url))
+
+	return strings.Join(parts, " ")
 }

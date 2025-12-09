@@ -11,17 +11,22 @@ import (
 
 // Model represents the TUI application state
 type Model struct {
-	services      []ServiceState
-	width         int
-	height        int
-	lastUpdate    time.Time
-	quitting      bool
-	monitor       *monitor.Monitor
-	monitorCancel func()
-	spinners      map[string]spinner.Model
-	selectedIndex int
-	showDetail    bool
-	detailName    string
+	services        []ServiceState
+	width           int
+	height          int
+	lastUpdate      time.Time
+	quitting        bool
+	monitor         *monitor.Monitor
+	monitorCancel   func()
+	spinners        map[string]spinner.Model
+	selectedIndex   int
+	showDetail      bool
+	detailName      string
+	showErrorDetail bool
+	errorDetailName string
+	clipboardMsg    string
+	clipboardTime   time.Time
+	pausedServices  map[string]bool
 
 	// Form state
 	form     *huh.Form
@@ -55,17 +60,19 @@ type ServiceState struct {
 	Error        error
 	IsChecking   bool
 	Checks       []string
+	Paused       bool
 }
 
 // NewModel creates a new TUI model
 func NewModel(m *monitor.Monitor, cancel func()) Model {
 	return Model{
-		services:      make([]ServiceState, 0),
-		monitor:       m,
-		monitorCancel: cancel,
-		lastUpdate:    time.Now(),
-		spinners:      make(map[string]spinner.Model),
-		selectedIndex: 0,
+		services:       make([]ServiceState, 0),
+		monitor:        m,
+		monitorCancel:  cancel,
+		lastUpdate:     time.Now(),
+		spinners:       make(map[string]spinner.Model),
+		selectedIndex:  0,
+		pausedServices: make(map[string]bool),
 	}
 }
 
@@ -97,4 +104,10 @@ func doTick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+// clipboardMsg is sent when clipboard operation completes
+type clipboardMsg struct {
+	success bool
+	message string
 }

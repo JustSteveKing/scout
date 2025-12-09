@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -121,6 +123,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Handle error detail modal interactions
+	if m.showErrorDetail {
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			switch msg.String() {
+			case "esc", "enter":
+				m.showErrorDetail = false
+				return m, nil
+			}
+		}
+		// When error detail is open, ignore other input
+		return m, nil
+	}
+
 	// Handle detail modal interactions
 	if m.showDetail {
 		if msg, ok := msg.(tea.KeyMsg); ok {
@@ -131,6 +146,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// When detail is open, ignore other input
+		return m, nil
 	}
 
 	switch msg := msg.(type) {
@@ -150,6 +166,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.services) > 0 {
 				m.detailName = m.getSelectedName()
 				m.showDetail = true
+			}
+		case "e":
+			// Show error detail for selected service
+			if len(m.services) > 0 {
+				selectedName := m.getSelectedName()
+				// Check if selected service has an error
+				for i := range m.services {
+					if m.services[i].Name == selectedName && m.services[i].Error != nil {
+						m.errorDetailName = selectedName
+						m.showErrorDetail = true
+						break
+					}
+				}
+			}
+		case "p":
+			// Toggle pause for selected service
+			if len(m.services) > 0 {
+				selectedName := m.getSelectedName()
+				m.pausedServices[selectedName] = !m.pausedServices[selectedName]
+
+				// Update monitor
+				if m.pausedServices[selectedName] {
+					m.monitor.PauseService(selectedName)
+				} else {
+					m.monitor.ResumeService(selectedName)
+				}
+
+				// Update the service state
+				for i := range m.services {
+					if m.services[i].Name == selectedName {
+						m.services[i].Paused = m.pausedServices[selectedName]
+						break
+					}
+				}
+			}
+		case "c":
+			// Copy curl command to clipboard
+			if len(m.services) > 0 {
+				selectedName := m.getSelectedName()
+				curlCmd := m.generateCurlCommand(selectedName)
+				if curlCmd != "" {
+					return m, copyToClipboard(curlCmd)
+				}
 			}
 		case "left", "h":
 			m.moveSelection(-1)
@@ -185,7 +244,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tickMsg:
+		// Only trigger render if clipboard message should be cleared
+		if m.clipboardMsg != "" && time.Since(m.clipboardTime) >= 3*time.Second {
+			m.clipboardMsg = ""
+		}
 		return m, doTick()
+
+	case clipboardMsg:
+		m.clipboardMsg = msg.message
+		m.clipboardTime = time.Now()
+		return m, nil
 	}
 
 	return m, nil
@@ -266,6 +334,8 @@ func (m *Model) updateServiceState(result monitor.Result) {
 
 	for i, svc := range m.services {
 		if svc.Name == result.ServiceName {
+			// Preserve paused state
+			isPaused := m.pausedServices[result.ServiceName]
 			m.services[i] = ServiceState{
 				Name:         result.ServiceName,
 				Status:       result.Status,
@@ -276,6 +346,7 @@ func (m *Model) updateServiceState(result monitor.Result) {
 				Error:        result.Error,
 				IsChecking:   isChecking,
 				Checks:       checks,
+				Paused:       isPaused,
 			}
 			found = true
 			break
@@ -283,6 +354,7 @@ func (m *Model) updateServiceState(result monitor.Result) {
 	}
 
 	if !found {
+		isPaused := m.pausedServices[result.ServiceName]
 		m.services = append(m.services, ServiceState{
 			Name:         result.ServiceName,
 			Status:       result.Status,
@@ -293,7 +365,10 @@ func (m *Model) updateServiceState(result monitor.Result) {
 			Error:        result.Error,
 			IsChecking:   isChecking,
 			Checks:       checks,
+			Paused:       isPaused,
 		})
+		// Sort services by name for stable order
+		sort.Slice(m.services, func(i, j int) bool { return m.services[i].Name < m.services[j].Name })
 	}
 
 	m.clampSelection()
@@ -473,5 +548,32 @@ func (m *Model) clampSelection() {
 	}
 	if m.selectedIndex < 0 {
 		m.selectedIndex = 0
+	}
+}
+
+// copyToClipboard copies text to clipboard using pbcopy on macOS
+func copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return clipboardMsg{success: false, message: "✗ Failed to copy"}
+		}
+
+		if err := cmd.Start(); err != nil {
+			return clipboardMsg{success: false, message: "✗ Failed to copy"}
+		}
+
+		if _, err := stdin.Write([]byte(text)); err != nil {
+			return clipboardMsg{success: false, message: "✗ Failed to copy"}
+		}
+
+		stdin.Close()
+
+		if err := cmd.Wait(); err != nil {
+			return clipboardMsg{success: false, message: "✗ Failed to copy"}
+		}
+
+		return clipboardMsg{success: true, message: "✓ Copied curl command"}
 	}
 }
