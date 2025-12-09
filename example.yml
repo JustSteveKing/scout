@@ -1,0 +1,41 @@
+# Global defaults
+check_interval: 30s
+timeout: 5s
+retry_attempts: 3
+
+# Service definitions
+services:
+  - name: api-production
+    url: https://api.example.com
+    health_endpoint: /health
+    method: GET
+    expected_status: 200
+    # Option 1: Bearer token auth
+    auth:
+      type: bearer
+      token: ${API_TOKEN}
+    
+  - name: staging-db
+    url: https://db.staging.example.com:5432
+    type: tcp  # Just check if port is open
+    
+  - name: redis-cache
+    url: redis://localhost:6379
+    type: redis
+    
+  - name: payments-service
+    url: https://payments.example.com
+    health_endpoint: /api/v1/status
+    # Option 2: Basic auth
+    auth:
+      type: basic
+      username: ${PAYMENTS_USER}
+      password: ${PAYMENTS_PASS}
+    
+  - name: custom-headers
+    url: https://custom.example.com
+    health_endpoint: /status
+    # Option 3: Custom headers (can still use this for other headers)
+    headers:
+      X-Custom-Header: custom-value
+      Authorization: Bearer ${CUSTOM_TOKEN}
