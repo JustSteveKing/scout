@@ -7,14 +7,18 @@ import (
 	"time"
 
 	"github.com/juststeveking/scout/internal/config"
+	"github.com/juststeveking/scout/internal/notify"
 )
 
 // Monitor orchestrates health checks for all services
 type Monitor struct {
-	Config   *config.Config
-	checkers map[string]Checker
-	results  chan Result
-	done     chan struct{}
+	Config          *config.Config
+	checkers        map[string]Checker
+	results         chan Result
+	done            chan struct{}
+	notifier        *notify.Notifier
+	serviceStatuses map[string]Status
+	muStatusLock    sync.RWMutex
 }
 
 // NewMonitor creates a new monitor instance
@@ -31,10 +35,12 @@ func NewMonitor(cfg *config.Config) (*Monitor, error) {
 	}
 
 	return &Monitor{
-		Config:   cfg,
-		checkers: checkers,
-		results:  make(chan Result, len(cfg.Services)*2),
-		done:     make(chan struct{}),
+		Config:          cfg,
+		checkers:        checkers,
+		results:         make(chan Result, len(cfg.Services)*2),
+		done:            make(chan struct{}),
+		notifier:        notify.NewNotifier(true),
+		serviceStatuses: make(map[string]Status),
 	}, nil
 }
 
@@ -50,6 +56,13 @@ func (m *Monitor) Start(ctx context.Context) {
 	if err != nil {
 		checkInterval = 30 * time.Second
 	}
+
+	// Initialize service statuses so first failure triggers a notification
+	m.muStatusLock.Lock()
+	for _, service := range m.Config.Services {
+		m.serviceStatuses[service.Name] = StatusUnknown
+	}
+	m.muStatusLock.Unlock()
 
 	// Initial check
 	m.checkAll(ctx)
@@ -137,6 +150,30 @@ func (m *Monitor) checkService(ctx context.Context, service config.Service) {
 		// Wait before retry (except on last attempt)
 		if attempt < retries-1 {
 			time.Sleep(time.Second)
+		}
+	}
+
+	// Track status change and send notification if needed
+	m.muStatusLock.Lock()
+	previousStatus := m.serviceStatuses[result.ServiceName]
+	m.serviceStatuses[result.ServiceName] = result.Status
+	m.muStatusLock.Unlock()
+
+	// Send notification on status change (but not on initial Checking status)
+	if previousStatus != result.Status && result.Status != StatusChecking {
+		// Only notify on actual health status changes, not Unknown->Checking
+		if (previousStatus != StatusUnknown && previousStatus != StatusChecking) ||
+			(result.Status == StatusHealthy || result.Status == StatusUnhealthy) {
+			notifyResult := notify.CheckResult{
+				ServiceName:  result.ServiceName,
+				Status:       notify.Status(result.Status),
+				ResponseTime: result.ResponseTime,
+				StatusCode:   result.StatusCode,
+				Error:        result.Error,
+				CheckedAt:    result.CheckedAt,
+				Message:      result.Message,
+			}
+			_ = m.notifier.NotifyStatusChange(notifyResult, notify.Status(previousStatus))
 		}
 	}
 
