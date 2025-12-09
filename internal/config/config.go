@@ -49,6 +49,20 @@ type Service struct {
 	Type           string            `yaml:"type,omitempty"`
 	Auth           *Auth             `yaml:"auth,omitempty"`
 	JSONAssertions []JSONAssertion   `yaml:"json_assertions,omitempty"`
+
+	// TLS check options
+	TLSCheck       bool `yaml:"tls_check,omitempty"`        // Enable TLS expiry checking
+	TLSWarningDays int  `yaml:"tls_warning_days,omitempty"` // Days before expiry to warn (default: 30)
+
+	// Latency check options
+	LatencyCheck     bool `yaml:"latency_check,omitempty"`     // Enable latency thresholds
+	LatencyThreshold int  `yaml:"latency_threshold,omitempty"` // Max latency in milliseconds
+
+	// DNS check options
+	DNSCheck bool `yaml:"dns_check,omitempty"` // Enable DNS resolution checking
+
+	// TCP ping options
+	TCPPingCheck bool `yaml:"tcp_ping_check,omitempty"` // Enable TCP ping checking
 }
 
 // GetConfigPath returns the path to the global config file

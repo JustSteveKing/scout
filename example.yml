@@ -75,3 +75,30 @@ services:
       - path: version
         value: "1.0"
         operator: "contains"
+  
+  - name: tls-cert-check
+    url: https://api.example.com
+    type: tls
+    # Check TLS certificate expiry
+    tls_check: true
+    tls_warning_days: 30  # Warn if certificate expires within 30 days
+  
+  - name: dns-resolution-check
+    url: api.example.com
+    type: dns
+    # Check if DNS resolves successfully
+    dns_check: true
+  
+  - name: api-latency-check
+    url: https://api.example.com
+    health_endpoint: /health
+    type: latency
+    # Check that response latency doesn't exceed threshold
+    latency_check: true
+    latency_threshold: 1000  # Max latency in milliseconds (1 second)
+  
+  - name: tcp-port-check
+    url: db.example.com:5432
+    type: tcp
+    # Simple TCP port connectivity check
+    tcp_ping_check: true

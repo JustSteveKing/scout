@@ -19,6 +19,9 @@ type Model struct {
 	monitor       *monitor.Monitor
 	monitorCancel func()
 	spinners      map[string]spinner.Model
+	selectedIndex int
+	showDetail    bool
+	detailName    string
 
 	// Form state
 	form     *huh.Form
@@ -32,7 +35,13 @@ type FormData struct {
 	URL            string
 	Method         string
 	ExpectedStatus string
-	Token          string
+	HealthEndpoint string
+	AuthType       string
+	AuthToken      string
+	AuthUsername   string
+	AuthPassword   string
+	Headers        string // Formatted as key:value,key:value
+	JSONAssertions string // Formatted as path:value:operator,path:value:operator
 }
 
 // ServiceState tracks the current state of a service
@@ -45,6 +54,7 @@ type ServiceState struct {
 	StatusCode   int
 	Error        error
 	IsChecking   bool
+	Checks       []string
 }
 
 // NewModel creates a new TUI model
@@ -55,6 +65,7 @@ func NewModel(m *monitor.Monitor, cancel func()) Model {
 		monitorCancel: cancel,
 		lastUpdate:    time.Now(),
 		spinners:      make(map[string]spinner.Model),
+		selectedIndex: 0,
 	}
 }
 
@@ -63,6 +74,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForResults(m.monitor),
 		tea.EnterAltScreen,
+		doTick(),
 	)
 }
 

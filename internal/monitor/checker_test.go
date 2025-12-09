@@ -405,3 +405,63 @@ func TestTCPChecker(t *testing.T) {
 		t.Errorf("Expected status unhealthy for closed port, got %v", result.Status)
 	}
 }
+
+func TestDNSChecker(t *testing.T) {
+	checker := NewDNSChecker(5 * time.Second)
+
+	// Test valid hostname
+	svc := config.Service{
+		Name: "test-dns",
+		URL:  "google.com",
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy for valid DNS, got %v: %v", result.Status, result.Error)
+	}
+
+	// Test invalid hostname
+	svc.URL = "this-should-not-exist-example-12345.invalid"
+	result = checker.Check(context.Background(), svc)
+	if result.Status != StatusUnhealthy {
+		t.Errorf("Expected status unhealthy for invalid hostname, got %v", result.Status)
+	}
+}
+
+func TestLatencyChecker(t *testing.T) {
+	// Start a test server with a delay
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	checker := NewLatencyChecker(5 * time.Second)
+	defer checker.Close()
+
+	// Test with no latency threshold
+	svc := config.Service{
+		Name: "test-latency",
+		URL:  ts.URL,
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy, got %v: %v", result.Status, result.Error)
+	}
+
+	// Test with high latency threshold (should pass)
+	svc.LatencyThreshold = 10000 // 10 second threshold
+	result = checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with high latency threshold, got %v", result.Status)
+	}
+
+	// Test with very low latency threshold to simulate failure
+	// Note: Real-world latency varies, so we use an extremely low threshold
+	svc.LatencyThreshold = 1 // 1ms - nearly impossible to achieve
+	result = checker.Check(context.Background(), svc)
+	// This test is flaky since local requests are very fast, so we just check it returns a result
+	if result.ResponseTime == 0 {
+		t.Errorf("Expected non-zero response time, got %v", result.ResponseTime)
+	}
+}

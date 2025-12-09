@@ -29,9 +29,11 @@ func NewMonitor(cfg *config.Config) (*Monitor, error) {
 	}
 
 	checkers := map[string]Checker{
-		"http": NewHTTPChecker(timeout),
-		"tcp":  NewTCPChecker(timeout),
-		// Add more checker types here (redis, postgres, etc.)
+		"http":    NewHTTPChecker(timeout),
+		"tcp":     NewTCPChecker(timeout),
+		"tls":     NewTLSChecker(timeout),
+		"dns":     NewDNSChecker(timeout),
+		"latency": NewLatencyChecker(timeout),
 	}
 
 	return &Monitor{
@@ -200,6 +202,9 @@ func (m *Monitor) closeCheckers() {
 	for _, checker := range m.checkers {
 		if httpChecker, ok := checker.(*HTTPChecker); ok {
 			httpChecker.Close()
+		}
+		if latencyChecker, ok := checker.(*LatencyChecker); ok {
+			latencyChecker.Close()
 		}
 	}
 }

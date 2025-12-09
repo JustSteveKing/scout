@@ -92,6 +92,11 @@ func (m Model) View() string {
 		)
 	}
 
+	// Render detail modal if active
+	if m.showDetail {
+		return m.renderDetailOverlay()
+	}
+
 	// Handle initial state when width is not set
 	width := m.width
 	if width < 40 {
@@ -146,21 +151,22 @@ func (m Model) View() string {
 		}
 
 		// Render checking services in grid
+		selected := m.getSelectedName()
 		if len(checking) > 0 {
 			b.WriteString("\n" + headerStyle.Render("⟳ Checking ("+fmt.Sprintf("%d", len(checking))+")") + "\n")
-			b.WriteString(m.renderServiceGrid(checking, cardWidth, cols))
+			b.WriteString(m.renderServiceGrid(checking, cardWidth, cols, selected))
 		}
 
 		// Render healthy services in grid
 		if len(healthy) > 0 {
 			b.WriteString("\n" + headerStyle.Render("✓ Healthy ("+fmt.Sprintf("%d", len(healthy))+")") + "\n")
-			b.WriteString(m.renderServiceGrid(healthy, cardWidth, cols))
+			b.WriteString(m.renderServiceGrid(healthy, cardWidth, cols, selected))
 		}
 
 		// Render unhealthy services in grid
 		if len(unhealthy) > 0 {
 			b.WriteString("\n" + headerStyle.Render("✗ Unhealthy ("+fmt.Sprintf("%d", len(unhealthy))+")") + "\n")
-			b.WriteString(m.renderServiceGrid(unhealthy, cardWidth, cols))
+			b.WriteString(m.renderServiceGrid(unhealthy, cardWidth, cols, selected))
 		}
 	}
 
@@ -168,21 +174,24 @@ func (m Model) View() string {
 	b.WriteString("\n")
 
 	// Create a status bar style footer
-	// [Time] [Help] [Status]
+	// [Last checked] [Help] [Status]
 
-	timeStr := time.Now().Format("15:04:05")
-	helpStr := "Quit: q / Ctrl+C"
+	helpStr := "Quit: q / Ctrl+C   New Service: n"
 
-	// Status summary
+	// Status summary and last checked indicator
 	var statusSummary string
+	var lastChecked time.Time
 	if len(m.services) > 0 {
 		healthy := 0
-		checking := 0
 		for _, svc := range m.services {
 			if svc.IsChecking {
-				checking++
-			} else if svc.Status == monitor.StatusHealthy {
+				continue
+			}
+			if svc.Status == monitor.StatusHealthy {
 				healthy++
+			}
+			if svc.LastChecked.After(lastChecked) {
+				lastChecked = svc.LastChecked
 			}
 		}
 		statusSummary = fmt.Sprintf("%d/%d Healthy", healthy, len(m.services))
@@ -190,8 +199,13 @@ func (m Model) View() string {
 		statusSummary = "No services"
 	}
 
+	lastCheckedText := "Last checked: --"
+	if !lastChecked.IsZero() {
+		lastCheckedText = fmt.Sprintf("Last checked: %s", m.formatTime(lastChecked))
+	}
+
 	// Footer layout
-	// 15:04:05 │ Quit: q / Ctrl+C                                         5/10 Healthy
+	// Last checked: 12 seconds ago      Quit: q / Ctrl+C   New Service: n      5/10 Healthy
 
 	footerStyle := lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -200,15 +214,18 @@ func (m Model) View() string {
 		Width(width).
 		PaddingTop(1)
 
-	left := fmt.Sprintf(" %s │ %s", timeStr, helpStr)
+	left := fmt.Sprintf(" %s", lastCheckedText)
+	middle := fmt.Sprintf("  %s  ", helpStr)
 	right := fmt.Sprintf("%s ", statusSummary)
 
-	gap := width - len(left) - len(right)
+	gap := width - len(left) - len(middle) - len(right)
 	if gap < 0 {
 		gap = 0
 	}
+	padLeft := gap / 2
+	padRight := gap - padLeft
 
-	footerContent := left + strings.Repeat(" ", gap) + right
+	footerContent := left + strings.Repeat(" ", padLeft) + middle + strings.Repeat(" ", padRight) + right
 	b.WriteString(footerStyle.Render(footerContent))
 	b.WriteString("\n")
 
@@ -270,7 +287,7 @@ func (m Model) renderHeader(width int, totalServices int) string {
 }
 
 // renderServiceGrid renders services in a grid layout
-func (m Model) renderServiceGrid(services []ServiceState, cardWidth int, cols int) string {
+func (m Model) renderServiceGrid(services []ServiceState, cardWidth int, cols int, selectedName string) string {
 	if cardWidth < 20 {
 		cardWidth = 20
 	}
@@ -284,7 +301,8 @@ func (m Model) renderServiceGrid(services []ServiceState, cardWidth int, cols in
 
 		var rowCards []string
 		for j := i; j < end; j++ {
-			card := m.renderServiceCompact(services[j], cardWidth)
+			isSelected := services[j].Name == selectedName
+			card := m.renderServiceCompact(services[j], cardWidth, isSelected)
 			rowCards = append(rowCards, card)
 		}
 
@@ -297,7 +315,7 @@ func (m Model) renderServiceGrid(services []ServiceState, cardWidth int, cols in
 }
 
 // renderServiceCompact renders a service card for grid layout with modern design
-func (m Model) renderServiceCompact(svc ServiceState, width int) string {
+func (m Model) renderServiceCompact(svc ServiceState, width int, isSelected bool) string {
 	var b strings.Builder
 
 	// Determine border color based on status
@@ -311,6 +329,9 @@ func (m Model) renderServiceCompact(svc ServiceState, width int) string {
 		borderColor = colorChecking
 	default:
 		borderColor = colorSubtle
+	}
+	if isSelected {
+		borderColor = colorAccent
 	}
 
 	// Status icon
@@ -333,7 +354,11 @@ func (m Model) renderServiceCompact(svc ServiceState, width int) string {
 	}
 
 	// Header: icon + name
-	headerLine := fmt.Sprintf("%s %s", statusIcon, serviceNameStyle.Render(name))
+	nameStyle := serviceNameStyle
+	if isSelected {
+		nameStyle = nameStyle.Underline(true)
+	}
+	headerLine := fmt.Sprintf("%s %s", statusIcon, nameStyle.Render(name))
 	b.WriteString(headerLine)
 	b.WriteString("\n")
 
@@ -371,6 +396,13 @@ func (m Model) renderServiceCompact(svc ServiceState, width int) string {
 		b.WriteString("\n")
 	}
 
+	// Enabled checks summary
+	if len(svc.Checks) > 0 {
+		checksLine := secondaryStyle.Render("Checks: " + strings.Join(svc.Checks, secondaryStyle.Render(" • ")))
+		b.WriteString(checksLine)
+		b.WriteString("\n")
+	}
+
 	// Last checked time (smaller)
 	if !svc.LastChecked.IsZero() && !svc.IsChecking {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(m.formatTime(svc.LastChecked)))
@@ -393,6 +425,132 @@ func (m Model) renderServiceCompact(svc ServiceState, width int) string {
 		Width(width).
 		BorderForeground(borderColor).
 		Render(content)
+}
+
+// renderDetailOverlay shows a modal with detailed info about the selected service
+func (m Model) renderDetailOverlay() string {
+	width := m.width
+	height := m.height
+	if width < 60 {
+		width = 60
+	}
+	if height < 20 {
+		height = 20
+	}
+
+	selected := m.detailName
+	if selected == "" {
+		selected = m.getSelectedName()
+	}
+
+	var svc *ServiceState
+	for i := range m.services {
+		if m.services[i].Name == selected {
+			svc = &m.services[i]
+			break
+		}
+	}
+
+	cfg := m.getServiceConfig(selected)
+
+	if svc == nil {
+		return lipgloss.Place(
+			width,
+			height,
+			lipgloss.Center,
+			lipgloss.Center,
+			baseCardStyle.
+				BorderForeground(colorAccent).
+				Width(width-8).
+				Render("No data for selected service. Press Esc to close."),
+		)
+	}
+
+	var b strings.Builder
+	statusLine := fmt.Sprintf("%s %s", m.getStatusIcon(svc.Status), serviceNameStyle.Render(svc.Name))
+	b.WriteString(titleStyle.Render(statusLine))
+	b.WriteString("\n")
+
+	// Status summary
+	b.WriteString(secondaryStyle.Render(fmt.Sprintf("Status: %s", svc.Status)))
+	b.WriteString("\n")
+	if svc.StatusCode > 0 {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Status Code: %d", svc.StatusCode)))
+		b.WriteString("\n")
+	}
+	if svc.ResponseTime > 0 {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Latency: %s", m.formatDuration(svc.ResponseTime))))
+		b.WriteString("\n")
+	}
+	if !svc.LastChecked.IsZero() {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Checked: %s", m.formatTime(svc.LastChecked))))
+		b.WriteString("\n")
+	}
+	if svc.Message != "" {
+		b.WriteString(secondaryStyle.Render(fmt.Sprintf("Message: %s", svc.Message)))
+		b.WriteString("\n")
+	}
+	if svc.Error != nil {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", svc.Error)))
+		b.WriteString("\n")
+	}
+
+	// Config info
+	if cfg != nil {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("Configuration"))
+		b.WriteString("\n")
+		if cfg.URL != "" {
+			b.WriteString(secondaryStyle.Render("URL: " + cfg.URL))
+			b.WriteString("\n")
+		}
+		if cfg.HealthEndpoint != "" {
+			b.WriteString(secondaryStyle.Render("Endpoint: " + cfg.HealthEndpoint))
+			b.WriteString("\n")
+		}
+		if cfg.Type != "" {
+			b.WriteString(secondaryStyle.Render("Type: " + cfg.Type))
+			b.WriteString("\n")
+		}
+		if len(cfg.Headers) > 0 {
+			b.WriteString(secondaryStyle.Render(fmt.Sprintf("Headers: %d", len(cfg.Headers))))
+			b.WriteString("\n")
+		}
+		if cfg.Auth != nil && cfg.Auth.Type != "" {
+			b.WriteString(secondaryStyle.Render("Auth: " + cfg.Auth.Type))
+			b.WriteString("\n")
+		}
+		if len(cfg.JSONAssertions) > 0 {
+			b.WriteString(secondaryStyle.Render(fmt.Sprintf("JSON Assertions: %d", len(cfg.JSONAssertions))))
+			b.WriteString("\n")
+		}
+		// Checks
+		labels := svc.Checks
+		if len(labels) == 0 {
+			labels = m.buildCheckLabels(*cfg)
+		}
+		if len(labels) > 0 {
+			b.WriteString(secondaryStyle.Render("Checks: " + strings.Join(labels, " • ")))
+			b.WriteString("\n")
+		}
+	}
+
+	// Footer hint
+	b.WriteString("\n")
+	b.WriteString(metadataStyle.Render("Enter/Esc to close"))
+
+	card := baseCardStyle.
+		BorderForeground(colorAccent).
+		Width(width - 10).
+		Render(b.String())
+
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		card,
+	)
 }
 
 // getStatusIcon returns the icon for a status
