@@ -44,3 +44,34 @@ services:
     auth:
       type: bearer
       token: ${API_TOKEN}
+  
+  - name: api-with-json-assertions
+    url: https://api.example.com
+    health_endpoint: /health
+    expected_status: 200
+    # JSON path assertions to validate response structure
+    json_assertions:
+      # Check if status field equals "ok"
+      - path: status
+        value: "ok"
+        operator: "=="
+      
+      # Check if uptime is greater than 0
+      - path: uptime
+        value: 0
+        operator: ">"
+      
+      # Check if database is connected
+      - path: dependencies.database
+        value: true
+        operator: "=="
+      
+      # Check if error message doesn't contain "fatal"
+      - path: message
+        value: "fatal"
+        operator: "!="
+      
+      # Check if response contains a specific substring
+      - path: version
+        value: "1.0"
+        operator: "contains"

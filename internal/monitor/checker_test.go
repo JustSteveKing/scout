@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,178 @@ func TestHTTPCheckerWithHeadersAndAuth(t *testing.T) {
 	result := checker.Check(context.Background(), svc)
 	if result.Status != StatusHealthy {
 		t.Errorf("Expected status healthy with headers and auth, got %v", result.Status)
+	}
+}
+
+func TestHTTPCheckerWithJSONAssertions(t *testing.T) {
+	// Start a test server that returns JSON
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"status": "ok",
+			"uptime": 3600,
+			"dependencies": {
+				"database": true,
+				"cache": true
+			},
+			"message": "all systems operational",
+			"version": "1.0.5"
+		}`))
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-json-assertions",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		ExpectedStatus: 200,
+		JSONAssertions: []config.JSONAssertion{
+			{
+				Path:     "status",
+				Value:    "ok",
+				Operator: "==",
+			},
+			{
+				Path:     "uptime",
+				Value:    float64(0),
+				Operator: ">",
+			},
+			{
+				Path:     "dependencies.database",
+				Value:    true,
+				Operator: "==",
+			},
+			{
+				Path:     "message",
+				Value:    "fatal",
+				Operator: "!=",
+			},
+		},
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with JSON assertions, got %v: %v", result.Status, result.Error)
+	}
+}
+
+func TestHTTPCheckerWithJSONAssertionFailure(t *testing.T) {
+	// Start a test server that returns JSON
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "degraded", "uptime": 100}`))
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-json-assertion-failure",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		ExpectedStatus: 200,
+		JSONAssertions: []config.JSONAssertion{
+			{
+				Path:     "status",
+				Value:    "ok",
+				Operator: "==",
+			},
+		},
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusUnhealthy {
+		t.Errorf("Expected status unhealthy when JSON assertion fails, got %v", result.Status)
+	}
+	if result.Error == nil {
+		t.Errorf("Expected error for failed JSON assertion")
+	}
+}
+
+func TestHTTPCheckerWithJSONAssertionMissingPath(t *testing.T) {
+	// Start a test server that returns JSON
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "ok"}`))
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-json-missing-path",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		ExpectedStatus: 200,
+		JSONAssertions: []config.JSONAssertion{
+			{
+				Path:     "nonexistent.path",
+				Value:    "value",
+				Operator: "==",
+			},
+		},
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusUnhealthy {
+		t.Errorf("Expected status unhealthy when JSON path is missing, got %v", result.Status)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "not found") {
+		t.Errorf("Expected error about missing JSON path")
+	}
+}
+
+func TestHTTPCheckerWithJSONAssertionComparisons(t *testing.T) {
+	// Start a test server that returns JSON with numeric values
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"response_time": 250,
+			"error_rate": 0.01,
+			"success_rate": 99.5
+		}`))
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-json-comparisons",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		ExpectedStatus: 200,
+		JSONAssertions: []config.JSONAssertion{
+			{
+				Path:     "response_time",
+				Value:    float64(1000),
+				Operator: "<",
+			},
+			{
+				Path:     "error_rate",
+				Value:    float64(0.05),
+				Operator: "<",
+			},
+			{
+				Path:     "success_rate",
+				Value:    float64(90),
+				Operator: ">",
+			},
+		},
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with comparison assertions, got %v: %v", result.Status, result.Error)
 	}
 }
 

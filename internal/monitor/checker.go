@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juststeveking/scout/internal/config"
+	"github.com/tidwall/gjson"
 )
 
 // Checker defines the interface for health checking
@@ -100,9 +101,16 @@ func (h *HTTPChecker) Check(ctx context.Context, service config.Service) Result 
 		return result
 	}
 	defer resp.Body.Close()
-	defer io.ReadAll(resp.Body)
 
 	result.StatusCode = resp.StatusCode
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result.Status = StatusUnhealthy
+		result.Error = fmt.Errorf("failed to read response body: %w", err)
+		return result
+	}
 
 	// Check if status code matches expected
 	expectedStatus := service.ExpectedStatus
@@ -110,15 +118,119 @@ func (h *HTTPChecker) Check(ctx context.Context, service config.Service) Result 
 		expectedStatus = 200
 	}
 
-	if resp.StatusCode == expectedStatus {
-		result.Status = StatusHealthy
-		result.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
-	} else {
+	if resp.StatusCode != expectedStatus {
 		result.Status = StatusUnhealthy
 		result.Message = fmt.Sprintf("Expected %d, got %d", expectedStatus, resp.StatusCode)
+		return result
 	}
 
+	// If there are JSON assertions, validate them
+	if len(service.JSONAssertions) > 0 {
+		if err := h.validateJSONAssertions(string(body), service.JSONAssertions, result); err != nil {
+			result.Status = StatusUnhealthy
+			result.Error = err
+			return result
+		}
+	}
+
+	result.Status = StatusHealthy
+	result.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+
 	return result
+}
+
+// validateJSONAssertions checks JSON assertions against the response body
+func (h *HTTPChecker) validateJSONAssertions(body string, assertions []config.JSONAssertion, result Result) error {
+	for _, assertion := range assertions {
+		value := gjson.Get(body, assertion.Path)
+
+		if !value.Exists() {
+			return fmt.Errorf("JSON path '%s' not found in response", assertion.Path)
+		}
+
+		if !h.compareValue(value, assertion.Value, assertion.Operator) {
+			return fmt.Errorf("JSON assertion failed: %s %s %v, got %v", assertion.Path, assertion.Operator, assertion.Value, value.Value())
+		}
+	}
+	return nil
+}
+
+// compareValue compares a gjson.Result with an expected value using the specified operator
+func (h *HTTPChecker) compareValue(actual gjson.Result, expected interface{}, operator string) bool {
+	switch strings.ToLower(operator) {
+	case "==", "equals":
+		return h.jsonValueEquals(actual, expected)
+	case "!=", "not_equals":
+		return !h.jsonValueEquals(actual, expected)
+	case ">":
+		return h.jsonGreaterThan(actual, expected)
+	case "<":
+		return h.jsonLessThan(actual, expected)
+	case ">=":
+		return h.jsonGreaterOrEqual(actual, expected)
+	case "<=":
+		return h.jsonLessOrEqual(actual, expected)
+	case "contains":
+		return h.jsonContains(actual, expected)
+	default:
+		return false
+	}
+}
+
+// jsonValueEquals checks if JSON values are equal
+func (h *HTTPChecker) jsonValueEquals(actual gjson.Result, expected interface{}) bool {
+	switch v := expected.(type) {
+	case string:
+		return actual.String() == v
+	case float64:
+		return actual.Float() == v
+	case bool:
+		return actual.Bool() == v
+	case nil:
+		return !actual.Exists()
+	default:
+		return false
+	}
+}
+
+// jsonGreaterThan checks if actual > expected
+func (h *HTTPChecker) jsonGreaterThan(actual gjson.Result, expected interface{}) bool {
+	if v, ok := expected.(float64); ok {
+		return actual.Float() > v
+	}
+	return false
+}
+
+// jsonLessThan checks if actual < expected
+func (h *HTTPChecker) jsonLessThan(actual gjson.Result, expected interface{}) bool {
+	if v, ok := expected.(float64); ok {
+		return actual.Float() < v
+	}
+	return false
+}
+
+// jsonGreaterOrEqual checks if actual >= expected
+func (h *HTTPChecker) jsonGreaterOrEqual(actual gjson.Result, expected interface{}) bool {
+	if v, ok := expected.(float64); ok {
+		return actual.Float() >= v
+	}
+	return false
+}
+
+// jsonLessOrEqual checks if actual <= expected
+func (h *HTTPChecker) jsonLessOrEqual(actual gjson.Result, expected interface{}) bool {
+	if v, ok := expected.(float64); ok {
+		return actual.Float() <= v
+	}
+	return false
+}
+
+// jsonContains checks if actual string contains expected substring
+func (h *HTTPChecker) jsonContains(actual gjson.Result, expected interface{}) bool {
+	if v, ok := expected.(string); ok {
+		return strings.Contains(actual.String(), v)
+	}
+	return false
 }
 
 // TCPChecker performs TCP connection checks

@@ -31,6 +31,13 @@ type Auth struct {
 	Password string `yaml:"password,omitempty"`
 }
 
+// JSONAssertion represents a JSON path assertion
+type JSONAssertion struct {
+	Path     string      `yaml:"path"`     // JSON path (e.g., "status.database" or "data[0].healthy")
+	Value    interface{} `yaml:"value"`    // Expected value to match
+	Operator string      `yaml:"operator"` // "==", "!=", ">", "<", ">=", "<=", "contains"
+}
+
 // Service represents a service to monitor
 type Service struct {
 	Name           string            `yaml:"name"`
@@ -41,6 +48,7 @@ type Service struct {
 	Headers        map[string]string `yaml:"headers,omitempty"`
 	Type           string            `yaml:"type,omitempty"`
 	Auth           *Auth             `yaml:"auth,omitempty"`
+	JSONAssertions []JSONAssertion   `yaml:"json_assertions,omitempty"`
 }
 
 // GetConfigPath returns the path to the global config file
