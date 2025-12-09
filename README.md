@@ -1,6 +1,6 @@
 # Scout
 
-`Monitor the health of your services from the terminal.`
+Monitor the health of your services from the terminal.
 
 Scout is a terminal-based dashboard for monitoring multiple services and APIs. Configure your endpoints, authentication, and health checks in a single config file, then launch Scout to see real-time status across all your services.
 
