@@ -35,7 +35,12 @@ services:
   - name: custom-headers
     url: https://custom.example.com
     health_endpoint: /status
-    # Option 3: Custom headers (can still use this for other headers)
+    # Custom headers for requests (independent of auth)
     headers:
       X-Custom-Header: custom-value
-      Authorization: Bearer ${CUSTOM_TOKEN}
+      X-Request-ID: scout-health-check
+      User-Agent: Scout/1.0
+    # You can still use auth for Authorization header
+    auth:
+      type: bearer
+      token: ${API_TOKEN}

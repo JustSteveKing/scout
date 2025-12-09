@@ -54,6 +54,153 @@ func TestHTTPChecker(t *testing.T) {
 	}
 }
 
+func TestHTTPCheckerWithCustomHeaders(t *testing.T) {
+	// Start a test server that validates headers
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for custom header
+		if r.Header.Get("X-Custom-Header") != "custom-value" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Check for another custom header
+		if r.Header.Get("X-Request-ID") != "test-123" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-headers",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		Headers: map[string]string{
+			"X-Custom-Header": "custom-value",
+			"X-Request-ID":    "test-123",
+		},
+		ExpectedStatus: 200,
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with custom headers, got %v", result.Status)
+	}
+}
+
+func TestHTTPCheckerWithBearerAuth(t *testing.T) {
+	// Start a test server that validates Bearer token
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer test-token-123" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-bearer-auth",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		Auth: &config.Auth{
+			Type:  "bearer",
+			Token: "test-token-123",
+		},
+		ExpectedStatus: 200,
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with bearer auth, got %v", result.Status)
+	}
+}
+
+func TestHTTPCheckerWithBasicAuth(t *testing.T) {
+	// Start a test server that validates Basic auth
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "testuser" || password != "testpass" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-basic-auth",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		Auth: &config.Auth{
+			Type:     "basic",
+			Username: "testuser",
+			Password: "testpass",
+		},
+		ExpectedStatus: 200,
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with basic auth, got %v", result.Status)
+	}
+}
+
+func TestHTTPCheckerWithHeadersAndAuth(t *testing.T) {
+	// Start a test server that validates both custom headers and auth
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check custom header
+		if r.Header.Get("X-Custom") != "value" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Check Bearer token
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer secret-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	checker := NewHTTPChecker(1 * time.Second)
+	defer checker.Close()
+
+	svc := config.Service{
+		Name:           "test-headers-and-auth",
+		URL:            ts.URL,
+		HealthEndpoint: "/health",
+		Headers: map[string]string{
+			"X-Custom": "value",
+		},
+		Auth: &config.Auth{
+			Type:  "bearer",
+			Token: "secret-token",
+		},
+		ExpectedStatus: 200,
+	}
+
+	result := checker.Check(context.Background(), svc)
+	if result.Status != StatusHealthy {
+		t.Errorf("Expected status healthy with headers and auth, got %v", result.Status)
+	}
+}
+
 func TestTCPChecker(t *testing.T) {
 	// Start a listener
 	l, err := net.Listen("tcp", "127.0.0.1:0")

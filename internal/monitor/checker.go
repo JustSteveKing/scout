@@ -69,9 +69,23 @@ func (h *HTTPChecker) Check(ctx context.Context, service config.Service) Result 
 		return result
 	}
 
-	// Add headers
+	// Add custom headers
 	for key, value := range service.Headers {
 		req.Header.Set(key, value)
+	}
+
+	// Add authentication headers
+	if service.Auth != nil {
+		switch strings.ToLower(service.Auth.Type) {
+		case "bearer":
+			if service.Auth.Token != "" {
+				req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", service.Auth.Token))
+			}
+		case "basic":
+			if service.Auth.Username != "" && service.Auth.Password != "" {
+				req.SetBasicAuth(service.Auth.Username, service.Auth.Password)
+			}
+		}
 	}
 
 	// Perform the request
